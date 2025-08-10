@@ -3,7 +3,7 @@
 #include <cmath>
 
 static cv::CascadeClassifier faceCascade;
-static bool                   useCascade = false;
+static bool useCascade = false;
 
 void initHeadPose(const std::string& cascadePath) {
     std::cerr << "initHeadPose: loading " << cascadePath;
@@ -13,7 +13,7 @@ void initHeadPose(const std::string& cascadePath) {
         useCascade = false;
         std::cerr << " exception=" << e.what();
     }
-    std::cerr << " useCascade=" << (useCascade?"true":"false") << "\n";
+    std::cerr << " useCascade=" << (useCascade ? "true" : "false") << "\n";
 }
 
 glm::mat4 estimateHead(const cv::Mat& frame) {
@@ -29,32 +29,33 @@ glm::mat4 estimateHead(const cv::Mat& frame) {
 
     auto& r = faces[0];
     std::vector<cv::Point2d> imgPts = {
-        {r.x + r.width*0.5, r.y + r.height*0.3},
-        {r.x + r.width*0.5, r.y + r.height*0.7},
-        {r.x + r.width*0.2, r.y + r.height*0.4},
-        {r.x + r.width*0.8, r.y + r.height*0.4},
-        {r.x + r.width*0.3, r.y + r.height*0.8},
-        {r.x + r.width*0.7, r.y + r.height*0.8}
+        {r.x + r.width * 0.5, r.y + r.height * 0.3},
+        {r.x + r.width * 0.5, r.y + r.height * 0.7},
+        {r.x + r.width * 0.2, r.y + r.height * 0.4},
+        {r.x + r.width * 0.8, r.y + r.height * 0.4},
+        {r.x + r.width * 0.3, r.y + r.height * 0.8},
+        {r.x + r.width * 0.7, r.y + r.height * 0.8}
     };
     std::vector<cv::Point3d> mdlPts = {
-        {  0.0,    0.0,    0.0},
-        {  0.0, -63.6,  -12.5},
-        { -43.3,  32.7,  -26.0},
-        {  43.3,  32.7,  -26.0},
-        { -28.9, -28.9,  -24.1},
-        {  28.9, -28.9,  -24.1}
+        { 0.0,    0.0,    0.0},
+        { 0.0, -63.6,  -12.5},
+        {-43.3,  32.7,  -26.0},
+        { 43.3,  32.7,  -26.0},
+        {-28.9, -28.9,  -24.1},
+        { 28.9, -28.9,  -24.1}
     };
 
     double f = frame.cols;
     cv::Mat cam = (cv::Mat_<double>(3,3) <<
-       f, 0, frame.cols/2,
-       0, f, frame.rows/2,
-       0, 0, 1);
-    cv::Mat dist = cv::Mat::zeros(4,1,CV_64F);
+        f, 0, frame.cols / 2,
+        0, f, frame.rows / 2,
+        0, 0, 1);
+    cv::Mat dist = cv::Mat::zeros(4, 1, CV_64F);
     cv::Mat rvec, tvec;
     cv::solvePnP(mdlPts, imgPts, cam, dist, rvec, tvec);
 
-    cv::Mat R; cv::Rodrigues(rvec, R);
+    cv::Mat R;
+    cv::Rodrigues(rvec, R);
 
     // Print for debug
     double sy = std::sqrt(R.at<double>(0,0)*R.at<double>(0,0) +
@@ -71,12 +72,14 @@ glm::mat4 estimateHead(const cv::Mat& frame) {
         z = 0;
     }
     auto toDeg = [](double r){ return r * 180.0 / M_PI; };
-    std::cerr<<"HeadPose Euler (deg): pitch="<<toDeg(x)
-             <<" yaw="<<toDeg(y)
-             <<" roll="<<toDeg(z)<<"\n";
+    std::cerr << "HeadPose Euler (deg): pitch=" << toDeg(x)
+              << " yaw=" << toDeg(y)
+              << " roll=" << toDeg(z) << "\n";
 
     glm::mat4 M(1.0f);
-    for(int i=0;i<3;i++)for(int j=0;j<3;j++)
-        M[j][i] = R.at<double>(i,j);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            M[j][i] = R.at<double>(i,j);
+
     return M;
 }

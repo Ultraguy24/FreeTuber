@@ -58,3 +58,31 @@ GLuint loadShaderProgram(const char* vPath, const char* fPath) {
     glDeleteShader(f);
     return p;
 }
+
+// New function to load from source strings directly
+GLuint loadShaderProgramFromSource(const char* vSrc, const char* fSrc) {
+    GLuint v = compileShader(GL_VERTEX_SHADER, vSrc);
+    GLuint f = compileShader(GL_FRAGMENT_SHADER, fSrc);
+    if (!v || !f) return 0;
+
+    GLuint p = glCreateProgram();
+    glAttachShader(p, v);
+    glAttachShader(p, f);
+    glLinkProgram(p);
+
+    GLint ok; glGetProgramiv(p, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        GLint len; glGetProgramiv(p, GL_INFO_LOG_LENGTH, &len);
+        std::string log(len, ' ');
+        glGetProgramInfoLog(p, len, nullptr, &log[0]);
+        std::cerr << "Program link error:\n" << log << "\n";
+        glDeleteProgram(p);
+        return 0;
+    }
+
+    glDetachShader(p, v);
+    glDetachShader(p, f);
+    glDeleteShader(v);
+    glDeleteShader(f);
+    return p;
+}

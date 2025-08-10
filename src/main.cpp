@@ -1,4 +1,5 @@
 #include <filesystem>
+#include <fstream>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "Shader.hpp"
@@ -9,6 +10,7 @@
 #include <glm/gtc/quaternion.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <iostream>
+#include "EmbeddedResources.hpp"  // Embedded shaders + cascade XML
 
 // Pre‐rotate avatar 180° so it faces the camera
 static const glm::mat4 modelMat = glm::rotate(
@@ -48,16 +50,21 @@ static void scroll_callback(GLFWwindow* w,double,double yoff){
 }
 
 int main(int argc, char** argv) {
-    // Paths & init
-    auto exeDir  = getExeDir(argv[0]);
-    auto assets  = exeDir / "assets";
-    auto shaders = exeDir / "shaders";
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " model.vrm\n";
+        return 1;
+    }
 
-    initHeadPose((assets/"haarcascade_frontalface_default.xml").string());
+    // Write embedded Haar cascade XML to temp file for OpenCV
+    std::filesystem::path cascadeTempPath = std::filesystem::temp_directory_path() / "embedded_haarcascade.xml";
+    {
+        std::ofstream out(cascadeTempPath, std::ios::binary);
+        out << haarCascadeXml;
+    }
+    initHeadPose(cascadeTempPath.string());
 
-    // GLFW + GLAD
+    // GLFW + GLAD initialization
     if (!glfwInit()) return -1;
-
     auto window = glfwCreateWindow(800,600,"FreeTuber",nullptr,nullptr);
     if (!window) {
         std::cerr << "Failed to create GLFW window\n";
@@ -65,11 +72,8 @@ int main(int argc, char** argv) {
         return -1;
     }
     glfwMakeContextCurrent(window);
-
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cerr << "GLAD init failed\n";
-        glfwDestroyWindow(window);
-        glfwTerminate();
+        std::cerr<<"GLAD init failed\n";
         return -1;
     }
     glDisable(GL_CULL_FACE);
@@ -87,44 +91,28 @@ int main(int argc, char** argv) {
     glfwSetScrollCallback(window,         scroll_callback);
     glViewport(0,0,800,600);
 
-    // Load shaders
-    GLuint shader = loadShaderProgram(
-        (shaders/"vert.glsl").string().c_str(),
-        (shaders/"frag.glsl").string().c_str()
-    );
-    if (!shader) {
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return -1;
-    }
+    // Load shaders from embedded strings
+    GLuint shader = loadShaderProgramFromSource(vertexShaderSrc, fragmentShaderSrc);
+    if (!shader) return -1;
     glUseProgram(shader);
 
     // Lighting uniforms
     glUniform3f(glGetUniformLocation(shader,"uLightDir"), 0.5f,1.0f,0.3f);
     glUniform3f(glGetUniformLocation(shader,"uAmbient"),  0.2f,0.2f,0.2f);
 
-    // Load VRM model path from argv or fallback
-    std::string vrmPath;
-    if (argc > 1) {
-        vrmPath = argv[1];
-    } else {
-        vrmPath = (assets / "model.vrm").string();
-    }
-    if (!loadVRM(vrmPath)) {
-        std::cerr << "Failed to load VRM model: " << vrmPath << "\n";
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return -1;
+    // Load VRM from argument path
+    if (!loadVRM(argv[1])) {
+        std::cerr<<"Failed to load VRM\n"; return -1;
     }
 
     // Split meshes by name (head vs body)
     std::vector<int> headMeshIndices, bodyMeshIndices;
     for (int i = 0; i < (int)meshes.size(); ++i) {
-        std::string n=meshes[i].name;
-        std::transform(n.begin(),n.end(),n.begin(),[](unsigned char c){return std::tolower(c);});
-        if (n.find("head")!=std::string::npos ||
-            n.find("hair")!=std::string::npos ||
-            n.find("face")!=std::string::npos) {
+        std::string n = meshes[i].name;
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c){ return std::tolower(c); });
+        if (n.find("head") != std::string::npos ||
+            n.find("hair") != std::string::npos ||
+            n.find("face") != std::string::npos) {
             headMeshIndices.push_back(i);
         } else {
             bodyMeshIndices.push_back(i);
@@ -134,10 +122,7 @@ int main(int argc, char** argv) {
     // Open webcam
     cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
-        std::cerr<<"Webcam open failed\n";
-        glfwDestroyWindow(window);
-        glfwTerminate();
-        return -1;
+        std::cerr<<"Webcam open failed\n"; return -1;
     }
 
     // Projection uniform
@@ -153,18 +138,13 @@ int main(int argc, char** argv) {
     GLint locView  = glGetUniformLocation(shader,"uView");
 
     // Main loop
-    glEnable(GL_DEPTH_TEST);
     while (!glfwWindowShouldClose(window)) {
         // Camera view
         glm::mat4 view = cam.getView();
-        glUniformMatrix4fv(locView,1,GL_FALSE,&view[0][0]);
+        glUniformMatrix4fv(locView, 1, GL_FALSE, &view[0][0]);
 
         // Head pose & smoothing
-        cv::Mat frame;
-        if (!cap.read(frame)) {
-            std::cerr << "Failed to capture frame\n";
-            break;
-        }
+        cv::Mat frame; cap >> frame;
         glm::mat4 rawHead = estimateHead(frame);
         glm::mat4 headM   = glm::inverse(rawHead);
         glm::quat HQ      = glm::quat_cast(headM);
@@ -178,32 +158,36 @@ int main(int argc, char** argv) {
 
         // Draw
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
 
         // BODY PASS
-        glUniformMatrix4fv(locModel,1,GL_FALSE,&modelMat[0][0]);
-        for (int idx: bodyMeshIndices) {
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, &modelMat[0][0]);
+        for (int idx : bodyMeshIndices) {
             auto& m = meshes[idx];
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m.diffuseTex);
             glBindVertexArray(m.vao);
-            glDrawElements(GL_TRIANGLES,(GLsizei)m.count,GL_UNSIGNED_INT,nullptr);
+            glDrawElements(GL_TRIANGLES, (GLsizei)m.count, GL_UNSIGNED_INT, nullptr);
         }
 
-        // HEAD PASS
-        glUniformMatrix4fv(locModel,1,GL_FALSE,&headModel[0][0]);
-        for (int idx: headMeshIndices) {
+        // HEAD PASS (transparent textures blend correctly)
+        glUniformMatrix4fv(locModel, 1, GL_FALSE, &headModel[0][0]);
+        for (int idx : headMeshIndices) {
             auto& m = meshes[idx];
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, m.diffuseTex);
             glBindVertexArray(m.vao);
-            glDrawElements(GL_TRIANGLES,(GLsizei)m.count,GL_UNSIGNED_INT,nullptr);
+            glDrawElements(GL_TRIANGLES, (GLsizei)m.count, GL_UNSIGNED_INT, nullptr);
         }
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    glfwDestroyWindow(window);
     glfwTerminate();
+
+    // Optionally remove temp cascade XML file:
+    // std::filesystem::remove(cascadeTempPath);
+
     return 0;
 }

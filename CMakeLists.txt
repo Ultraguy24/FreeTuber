@@ -38,6 +38,7 @@ target_include_directories(FreeTuber PRIVATE
   ${CMAKE_SOURCE_DIR}/third_party/tinygltf
   ${GLFW_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
+  ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(FreeTuber PRIVATE
