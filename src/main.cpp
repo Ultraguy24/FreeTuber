@@ -52,14 +52,25 @@ int main(int argc, char** argv) {
     auto exeDir  = getExeDir(argv[0]);
     auto assets  = exeDir / "assets";
     auto shaders = exeDir / "shaders";
+
     initHeadPose((assets/"haarcascade_frontalface_default.xml").string());
 
     // GLFW + GLAD
     if (!glfwInit()) return -1;
+
     auto window = glfwCreateWindow(800,600,"FreeTuber",nullptr,nullptr);
+    if (!window) {
+        std::cerr << "Failed to create GLFW window\n";
+        glfwTerminate();
+        return -1;
+    }
     glfwMakeContextCurrent(window);
+
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cerr<<"GLAD init failed\n"; return -1;
+        std::cerr << "GLAD init failed\n";
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
     }
     glDisable(GL_CULL_FACE);
 
@@ -81,19 +92,32 @@ int main(int argc, char** argv) {
         (shaders/"vert.glsl").string().c_str(),
         (shaders/"frag.glsl").string().c_str()
     );
-    if (!shader) return -1;
+    if (!shader) {
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
+    }
     glUseProgram(shader);
 
     // Lighting uniforms
     glUniform3f(glGetUniformLocation(shader,"uLightDir"), 0.5f,1.0f,0.3f);
     glUniform3f(glGetUniformLocation(shader,"uAmbient"),  0.2f,0.2f,0.2f);
 
-    // Load VRM (this now forces RGBA upload of textures)
-    if (!loadVRM((assets/"model.vrm").string())) {
-        std::cerr<<"Failed to load VRM\n"; return -1;
+    // Load VRM model path from argv or fallback
+    std::string vrmPath;
+    if (argc > 1) {
+        vrmPath = argv[1];
+    } else {
+        vrmPath = (assets / "model.vrm").string();
+    }
+    if (!loadVRM(vrmPath)) {
+        std::cerr << "Failed to load VRM model: " << vrmPath << "\n";
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
     }
 
-    // Split meshes by name (head vs body) — unchanged from before
+    // Split meshes by name (head vs body)
     std::vector<int> headMeshIndices, bodyMeshIndices;
     for (int i = 0; i < (int)meshes.size(); ++i) {
         std::string n=meshes[i].name;
@@ -110,7 +134,10 @@ int main(int argc, char** argv) {
     // Open webcam
     cv::VideoCapture cap(0);
     if (!cap.isOpened()) {
-        std::cerr<<"Webcam open failed\n"; return -1;
+        std::cerr<<"Webcam open failed\n";
+        glfwDestroyWindow(window);
+        glfwTerminate();
+        return -1;
     }
 
     // Projection uniform
@@ -126,13 +153,18 @@ int main(int argc, char** argv) {
     GLint locView  = glGetUniformLocation(shader,"uView");
 
     // Main loop
+    glEnable(GL_DEPTH_TEST);
     while (!glfwWindowShouldClose(window)) {
         // Camera view
         glm::mat4 view = cam.getView();
         glUniformMatrix4fv(locView,1,GL_FALSE,&view[0][0]);
 
         // Head pose & smoothing
-        cv::Mat frame; cap>>frame;
+        cv::Mat frame;
+        if (!cap.read(frame)) {
+            std::cerr << "Failed to capture frame\n";
+            break;
+        }
         glm::mat4 rawHead = estimateHead(frame);
         glm::mat4 headM   = glm::inverse(rawHead);
         glm::quat HQ      = glm::quat_cast(headM);
@@ -146,7 +178,6 @@ int main(int argc, char** argv) {
 
         // Draw
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        glEnable(GL_DEPTH_TEST);
 
         // BODY PASS
         glUniformMatrix4fv(locModel,1,GL_FALSE,&modelMat[0][0]);
@@ -158,7 +189,7 @@ int main(int argc, char** argv) {
             glDrawElements(GL_TRIANGLES,(GLsizei)m.count,GL_UNSIGNED_INT,nullptr);
         }
 
-        // HEAD PASS (transparent textures now blend correctly)
+        // HEAD PASS
         glUniformMatrix4fv(locModel,1,GL_FALSE,&headModel[0][0]);
         for (int idx: headMeshIndices) {
             auto& m = meshes[idx];
@@ -172,6 +203,7 @@ int main(int argc, char** argv) {
         glfwPollEvents();
     }
 
+    glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
 }
